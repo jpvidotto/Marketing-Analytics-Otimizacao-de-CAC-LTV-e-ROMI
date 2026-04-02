@@ -172,58 +172,190 @@ plt.savefig('media_pedidos_por_coorte.png')
 plt.close()
 
 #Vamos calcular a receita média por mês e a receita total por cliente (LTV - Lifetime Value) para os usuários que realizaram compras. Para isso, agruparemos os dados de compras por mês e por cliente, e calcularemos as métricas correspondentes.
-mean_total_revenue = orders_log['revenue'].mean()
-#print(f"Receita média por mês: {mean_total_revenue:.2f}")
+average_check = orders_log['revenue'].mean()
+print(f"O ticket médio geral é: ${average_check:.2f}")
 
-#Calculando a receita total por cliente (LTV)
-ltv_por_cliente = orders_log.groupby('uid')['revenue'].sum()
-ltv_medio = ltv_por_cliente.mean()
-#print(f"Receita total por cliente: {ltv_medio:.2f}")
+# # Análise do Ticket Médio ao longo do tempo
+orders_log['order_month'] = orders_log['buy_ts'].dt.to_period('M')
+monthly_avg_check = orders_log.groupby('order_month')['revenue'].mean()
+
+plt.figure(figsize=(12, 6))
+sns.lineplot(x=monthly_avg_check.index.astype(str), y=monthly_avg_check.values)
+plt.title('Ticket Médio por Mês')
+plt.xlabel('Mês')
+plt.ylabel('Ticket Médio')
+plt.xticks(rotation=45)
+plt.savefig('ticket_medio_por_mes.png')
+plt.close()
+
+# # --- Quanto dinheiro eles trazem para a empresa (LTV)?
+
+
+# # Definindo o mês de aquisição (primeira compra) como o coorte
+orders_log['acquisition_month'] = orders_log.groupby('uid')['buy_ts'].transform('min').dt.to_period('M')
+
+# # Calculando a idade do coorte para cada pedido
+orders_log['cohort_lifetime'] = ((orders_log['order_month'] - orders_log['acquisition_month']).apply(lambda x: x.n))
+
+# # Calculando a receita por coorte e por idade
+cohorts_revenue = orders_log.groupby(['acquisition_month', 'cohort_lifetime'])['revenue'].sum().reset_index()
+
+# # Obtendo o tamanho de cada coorte (número de clientes únicos)
+cohort_sizes = orders_log.groupby('acquisition_month')['uid'].nunique().reset_index()
+cohort_sizes.columns = ['acquisition_month', 'n_buyers']
+
+# # Unindo os dados de receita e tamanho do coorte
+cohorts_data = pd.merge(cohorts_revenue, cohort_sizes, on='acquisition_month')
+
+# # LTV
+cohorts_data['ltv'] = cohorts_data['revenue'] / cohorts_data['n_buyers']
+
+# # Tabela pivot para o LTV
+ltv_pivot = cohorts_data.pivot_table(index='acquisition_month',
+                                    columns='cohort_lifetime',
+                                    values='ltv',
+                                    aggfunc='sum').cumsum(axis=1)
+
+# # Heatmap do LTV
+plt.figure(figsize=(12, 6))
+sns.heatmap(ltv_pivot, annot=True, fmt='.2f', cmap='YlGnBu')
+plt.title('LTV por Coorte e Idade do Coorte')
+plt.xlabel('Meses desde a Primeira Compra')
+plt.ylabel('Mês da Primeira Compra')
+plt.savefig('ltv_por_coorte.png')
+plt.close()
+
+
 
 #Respondendo a 3 etapa.
 
-#Calculando o valor gasto em marketing por origem de tráfego. Para isso, agruparemos os dados de custos por 'source_id' e calcularemos a soma dos custos para cada origem de tráfego.
-custo_por_origem = costs.groupby('source_id')['costs'].sum().reset_index()
-#print("Valor gasto em marketing por origem de tráfego:")
-#print(custo_por_origem)
+# # --- Quanto dinheiro foi gasto?
 
-#Calculando o valor gasto em marketing por mês. Para isso, agruparemos os dados de custos por mês e calcularemos a soma dos custos para cada mês.
-custo_por_mes = costs.groupby(costs['dt'].dt.to_period('M'))['costs'].sum()
-#print("Valor gasto em marketing por mês:")
-#print(custo_por_mes)
 
-#Calculando o valor gasto em marketing em todo o período. Para isso, somaremos todos os custos registrados no dataset de custos.
-custo_total = costs['costs'].sum()
-#print(f"Valor gasto em marketing em todo o período: {custo_total:.2f}")
 
-#Calculando o gasto foi gasto em aquisição de clientes para cada origem de tráfego. Para isso, identificaremos os usuários que realizaram compras e suas respectivas origens de tráfego, e depois calcularemos o custo por aquisição (CPA) para cada origem.
+# # Adicionando uma coluna de mês para agrupar os custos
+costs['month'] = costs['dt'].dt.to_period('M')
 
-clients_por_origem = visit_logs.groupby(['source_id', 'device'])['uid'].nunique().reset_index()
+# # Criar uma tabela dinâmica (pivot) para organizar os dados para o gráfico
+# # Onde o índice é o mês, as colunas são as fontes e os valores são os custos
+costs_pivot = costs.pivot_table(
+index='month',
+columns='source_id',
+values='costs',
+aggfunc='sum'
+ ).fillna(0) 
 
-cac_por_origem = custo_por_origem.merge(clients_por_origem, on='source_id', how='left')
-cac_por_origem['cac'] = cac_por_origem['costs'] / cac_por_origem['uid']
-cac_por_origem = cac_por_origem[['source_id', 'cac']].sort_values(by='cac')
+# # Plotando o gráfico de linhas a partir da tabela dinâmica
 plt.figure(figsize=(12, 6))
-sns.barplot(x='source_id', y='cac', data=cac_por_origem)
-plt.title('Custo por Aquisição (CPA) por Origem de Tráfego')
-plt.xlabel('Origem de Tráfego')
-plt.ylabel('Custo por Aquisição (CPA)')
+sns.lineplot(data=costs, x='month', y='costs', hue='source_id')
+plt.title('Custos por Fonte ao Longo do Tempo')
+plt.xlabel('Mês')
+plt.ylabel('Custos Totais')
 plt.xticks(rotation=45)
-plt.savefig('cac_por_origem.png')
+plt.legend(title='Fonte de Aquisição')
+plt.savefig('custos_por_fonte.png')
 plt.close()
 
-cac_by_device = visit_logs.groupby(['device', 'source_id'])['uid'].nunique().reset_index()
-cac_by_device = cac_by_device.merge(cac_por_origem, on='source_id', how='left')
-cac_by_device['total_price'] = cac_by_device['uid'] * cac_by_device['cac']
+
+
+# # --- Quanto custou a aquisição de clientes (CAC)? 
+
+
+# # Adiciando uma coluna de mês aos custos
+costs['month'] = costs['dt'].dt.to_period('M')
+
+# # Encontrando a primeira visita de cada usuário para obter a fonte de aquisição
+first_visits = visits.sort_values('start_ts').drop_duplicates('uid')
+first_visits = first_visits[['uid', 'source_id']]
+
+# # Encontrando o mês da primeira compra de cada cliente
+first_orders = orders.sort_values('buy_ts').drop_duplicates('uid')
+first_orders['acquisition_month'] = first_orders['buy_ts'].dt.to_period('M')
+first_orders = first_orders[['uid', 'acquisition_month']]
+
+# # Unindo as informações para saber a fonte e o mês de aquisição de cada cliente
+buyers = pd.merge(first_orders, first_visits, on='uid')
+
+# # Calculando o número de clientes adquiridos por mês e por fonte
+buyers_by_month_source = buyers.groupby(['acquisition_month', 'source_id'])['uid'].nunique().reset_index()
+buyers_by_month_source.columns = ['month', 'source_id', 'n_buyers']
+
+# # Formanto os custos mensais por fonte
+costs_by_month_source = costs.groupby(['month', 'source_id'])['costs'].sum().reset_index()
+
+# # Unindo custos e número de compradores por mês e fonte
+cac_monthly_data = pd.merge(costs_by_month_source, buyers_by_month_source, on=['month', 'source_id'])
+
+# # CAC mensal para cada fonte
+# # (Lidar com a divisão por zero caso haja custos sem compradores, embora improvável com o merge)
+cac_monthly_data = cac_monthly_data[cac_monthly_data['n_buyers'] > 0]
+cac_monthly_data['cac'] = cac_monthly_data['costs'] / cac_monthly_data['n_buyers']
+
+# # Tabela dinâmica (pivot) para a plotagem
+cac_pivot = cac_monthly_data.pivot_table(
+index='month',
+columns='source_id',
+values='cac'
+ )
+
+# # Gráfico de linhas
 plt.figure(figsize=(12, 6))
-sns.barplot(x='device', y='total_price', data=cac_by_device)
-plt.title('Custo Total por Dispositivo')
-plt.xlabel('Dispositivo')
-plt.ylabel('Custo Total')
+sns.lineplot(data=cac_pivot)
+plt.title('CAC por Fonte ao Longo do Tempo')
+plt.xlabel('Mês')
+plt.ylabel('CAC (Custo por Aquisição)')
 plt.xticks(rotation=45)
-plt.savefig('cac_por_dispositivo.png')
+plt.legend(title='Fonte de Aquisição')
+plt.savefig('cac_por_fonte.png')
 plt.close()
 
-#Verificando as informações obtidas nas análises as origens mais eficazes em termos de aquisição de clientes, comparando o custo por aquisição (CPA) para cada origem de tráfego. Para isso, identificaremos as origens com os menores CPA e analisaremos suas características para entender por que são mais eficazes.
 
 
+
+
+# # --- Os investimentos valeram a pena? 
+
+# # LTV acumulado por coorte
+orders_log['acquisition_month'] = orders_log.groupby('uid')['buy_ts'].transform('min').dt.to_period('M')
+orders_log['order_month'] = orders_log['buy_ts'].dt.to_period('M')
+orders_log['cohort_lifetime'] = (orders_log['order_month'] - orders_log['acquisition_month']).apply(lambda x: x.n)
+cohorts_revenue = orders_log.groupby(['acquisition_month', 'cohort_lifetime'])['revenue'].sum().reset_index()
+cohort_sizes = orders_log.groupby('acquisition_month')['uid'].nunique().reset_index()
+cohort_sizes.columns = ['acquisition_month', 'n_buyers']
+cohorts_data = pd.merge(cohorts_revenue, cohort_sizes, on='acquisition_month')
+cohorts_data['ltv'] = cohorts_data['revenue'] / cohorts_data['n_buyers']
+ltv_pivot = cohorts_data.pivot_table(index='acquisition_month', columns='cohort_lifetime', values='ltv').cumsum(axis=1)
+
+# # CAC por coorte (mês de aquisição)
+costs['month'] = costs['dt'].dt.to_period('M')
+first_orders = orders_log.sort_values('buy_ts').drop_duplicates('uid')
+first_orders['acquisition_month'] = first_orders['buy_ts'].dt.to_period('M')
+n_buyers_by_cohort = first_orders.groupby('acquisition_month')['uid'].nunique().reset_index()
+n_buyers_by_cohort.columns = ['month', 'n_buyers']
+costs_by_cohort = costs.groupby('month')['costs'].sum().reset_index()
+cac_by_cohort = pd.merge(costs_by_cohort, n_buyers_by_cohort, on='month')
+cac_by_cohort['cac'] = cac_by_cohort['costs'] / cac_by_cohort['n_buyers']
+cac_by_cohort = cac_by_cohort[['month', 'cac']]
+cac_by_cohort.columns = ['acquisition_month', 'cac']
+
+# # ROMI (LTV - CAC) / CAC
+# # Juntando o CAC com a tabela de LTV
+ report = pd.merge(ltv_pivot.reset_index(), cac_by_cohort, on='acquisition_month')
+report = report.set_index('acquisition_month')
+
+# # Obtendo a coluna de CAC e as colunas de LTV
+cac_values = report['cac']
+ltv_values = report.drop(columns=['cac'])
+
+# # Calculando o ROMI para cada mês da vida do coorte
+romi_pivot = ltv_values.subtract(cac_values, axis=0).divide(cac_values, axis=0)
+
+# # Mapa de calor do ROMI
+sns.heatmap(romi_pivot, annot=True, fmt='.2f', cmap='YlGnBu')
+plt.title('ROMI por Coorte e Idade do Coorte')
+plt.xlabel('Meses desde a Primeira Compra')
+plt.ylabel('Mês da Primeira Compra')
+plt.savefig('romi_por_coorte.png')
+plt.close()
+
+## O melhor mês para investir foi o mês 0 (mês da primeira compra), onde o ROMI é mais alto, indicando que o retorno sobre o investimento foi mais significativo nesse período. Isso sugere que os esforços de aquisição de clientes foram mais eficazes em gerar valor imediato para a empresa. No entanto, é importante considerar que o ROMI pode variar ao longo do tempo, e a análise de coortes ajuda a entender como o valor dos clientes evolui após a aquisição. Portanto, embora o mês 0 seja o melhor para investir, é crucial monitorar o desempenho das coortes ao longo do tempo para otimizar as estratégias de marketing e retenção.
